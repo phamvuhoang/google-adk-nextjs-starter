@@ -1,0 +1,853 @@
+openapi: 3.1.0
+info:
+  title: AI Agent API
+  description: API for the AI Agent frontend and service interaction
+  version: 0.1.0
+servers:
+  - url: /api
+    description: Development server
+
+# --- Components Definition (Single top-level key) ---
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Firebase ID token
+
+  schemas:
+    # --- Error Responses ---
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: A description of the error
+      required:
+        - error
+
+    # --- User Schemas ---
+    UserProfilePartial:
+      type: object
+      properties:
+        uid:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          nullable: true
+        planTier:
+          type: string
+          enum: [Free, Pro, Enterprise]
+        updatedAt:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp
+        settings:
+          type: object
+          additionalProperties: true
+          nullable: true
+        usageCounters: # Optional, depends on implementation
+          type: object
+          properties:
+            month:
+              type: string
+            messagesUsed:
+              type: integer
+            projectsGenerated:
+              type: integer
+            tokensUsed:
+              type: integer
+              nullable: true
+          nullable: true
+
+    UserUpdateInput:
+      type: object
+      properties:
+        name:
+          type: string
+        settings:
+          type: object
+          additionalProperties: true
+      minProperties: 1 # Must provide at least one field to update
+
+    UserUsageResponse:
+      type: object
+      properties:
+        planTier:
+          type: string
+          enum: [Free, Pro, Enterprise]
+        messagesUsed:
+          type: integer
+        messagesLimit:
+          type: number # Can be Infinity
+        projectsGenerated:
+          type: integer
+        projectsLimit:
+          type: number # Can be Infinity
+        tokensUsed:
+          type: integer
+          nullable: true
+        tokensLimit:
+          type: number # Can be Infinity
+
+    # --- Session Schemas ---
+    SessionSummaryResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        ownerId:
+          type: string
+          format: uuid
+        title:
+          type: string
+          nullable: true
+        updatedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        projectId:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [active, archived, completed]
+          nullable: true
+
+    MessageResponse:
+      type: object
+      properties:
+        messageId:
+          type: string
+        sender:
+          type: string
+          enum: [user, assistant, system]
+        text:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        role:
+          type: string
+          enum: [user, assistant, system]
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    AssistantMessageResponse: # Specific type for message POST response
+        type: object
+        properties:
+            messageId:
+              type: string
+            sender:
+              type: string
+              enum: [assistant]
+            text:
+              type: string
+            createdAt:
+              type: string
+              format: date-time
+            role:
+              type: string
+              enum: [assistant]
+            metadata:
+              type: object
+              additionalProperties: true
+              nullable: true
+
+    SessionDetailResponse:
+      allOf:
+        - $ref: '#/components/schemas/SessionSummaryResponse'
+        - type: object
+          properties:
+            messages:
+              type: array
+              items:
+                $ref: '#/components/schemas/MessageResponse'
+
+    CreateSessionInput:
+      type: object
+      properties:
+        title:
+          type: string
+          nullable: true
+        message:
+          type: string
+          description: Optional initial message from the user.
+
+    CreateSessionResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        ownerId:
+          type: string
+          format: uuid
+        title:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [active, archived, completed]
+        projectId:
+          type: string
+          nullable: true
+        initialAssistantMessage:
+            $ref: '#/components/schemas/AssistantMessageResponse'
+            nullable: true
+
+    CreateMessageInput:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: The text content of the user's message.
+
+    GenerateProjectInput: # Body for generate endpoint
+        type: object
+        properties:
+            projectName:
+                type: string
+            techStack:
+                type: string
+
+    GenerateProjectResponse:
+        type: object
+        properties:
+            status:
+                type: string
+                enum: [generating, completed, failed]
+            message:
+                type: string
+            projectId:
+                type: string
+                nullable: true
+            previewURL:
+                type: string
+                format: url
+                nullable: true
+            downloadURL:
+                type: string
+                format: url
+                nullable: true
+
+    # --- ADK Schemas ---
+    AdkRequestPayload:
+      type: object
+      required:
+        - user_id
+        - session_id
+        - new_message
+      properties:
+        user_id:
+          type: string
+          description: User ID for the conversation
+        session_id:
+          type: string
+          description: Session ID for the conversation
+        new_message:
+          type: object
+          properties:
+            role:
+              type: string
+              enum: [user]
+            text:
+              type: string
+              description: The message text
+          required:
+            - role
+            - text
+        context:
+          type: object
+          description: Additional context for the conversation
+          additionalProperties: true
+          
+    AdkResponsePayload:
+      type: object
+      properties:
+        content:
+          type: object
+          properties:
+            parts:
+              type: array
+              items:
+                type: object
+                properties:
+                  text:
+                    type: string
+                  mime_type:
+                    type: string
+            next_actions:
+              type: array
+              items:
+                type: object
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              event_type:
+                type: string
+              content:
+                type: object
+                additionalProperties: true
+
+    # --- Project Schemas ---
+    ProjectFile:
+        type: object
+        properties:
+            path:
+                type: string
+            content:
+                type: string
+                nullable: true
+            size:
+                type: integer
+                nullable: true
+            storageRef:
+                type: string
+                nullable: true
+
+    ProjectSummaryResponse:
+      type: object
+      properties:
+        projectId:
+          type: string
+        ownerId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        previewURL:
+          type: string
+          format: url
+          nullable: true
+        sessionId:
+          type: string
+          nullable: true
+
+    ProjectDetailResponse:
+        allOf:
+          - $ref: '#/components/schemas/ProjectSummaryResponse'
+          - type: object
+            properties:
+              storagePath:
+                type: string
+                nullable: true
+              boltContainerId:
+                type: string
+                nullable: true
+              collaboratorIds:
+                type: array
+                items:
+                  type: string
+                  format: uuid
+                nullable: true
+              isPublic:
+                type: boolean
+                nullable: true
+              files:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectFile'
+                nullable: true
+
+    ProjectUpdateInput:
+        type: object
+        properties:
+            name:
+                type: string
+            description:
+                type: string
+        minProperties: 1
+
+    DownloadResponse:
+        type: object
+        properties:
+            downloadURL:
+                type: string
+                format: url
+                nullable: true
+            error:
+                type: string
+                nullable: true
+            message:
+                type: string
+                nullable: true
+
+# --- Reusable Responses Definition ---
+responses:
+  Unauthorized:
+    description: Unauthorized - Invalid or missing Bearer token.
+    content:
+      application/json:
+        schema:
+          $ref: '#/components/schemas/ErrorResponse'
+  Forbidden:
+    description: Forbidden - User does not have permission to access the resource.
+    content:
+      application/json:
+        schema:
+          $ref: '#/components/schemas/ErrorResponse'
+  NotFound:
+    description: Not Found - The requested resource could not be found.
+    content:
+      application/json:
+        schema:
+          $ref: '#/components/schemas/ErrorResponse'
+  InternalServerError:
+    description: Internal Server Error.
+    content:
+      application/json:
+        schema:
+          $ref: '#/components/schemas/ErrorResponse'
+
+# --- API Paths (Keep paths at the top level) ---
+paths:
+  /adk:
+    post:
+      tags: [ADK]
+      summary: Proxy to the ADK agent
+      description: Forwards user messages to the ADK agent and returns the agent's response
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdkRequestPayload'
+      responses:
+        '200':
+          description: ADK agent response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdkResponsePayload'
+        '400':
+          description: Bad Request (e.g., missing required fields)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /users/me:
+    get:
+      tags: [Users]
+      summary: Get current user profile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: User profile retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfilePartial'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User profile not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      tags: [Users]
+      summary: Update current user profile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdateInput'
+      responses:
+        '200':
+          description: User profile updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfilePartial' # Returns partial updated profile
+        '400':
+          description: Bad Request (e.g., no fields provided)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /users/me/usage:
+    get:
+      tags: [Users]
+      summary: Get current user usage statistics
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Usage statistics retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserUsageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Usage data not found for user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /sessions:
+    get:
+      tags: [Sessions]
+      summary: List user sessions
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of user sessions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SessionSummaryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      tags: [Sessions]
+      summary: Create a new session
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionInput'
+      responses:
+        '201':
+          description: Session created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateSessionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /sessions/{sessionId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: ID of the session to retrieve or delete.
+    get:
+      tags: [Sessions]
+      summary: Get session details and messages
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Session details retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetailResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags: [Sessions]
+      summary: Delete a session
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Session deleted successfully.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /sessions/{sessionId}/messages:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: ID of the session to post a message to.
+    post:
+      tags: [Sessions]
+      summary: Post a message to a session and get AI response
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMessageInput'
+      responses:
+        '200': # Or 201 if creating a new message resource
+          description: Assistant message response received.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssistantMessageResponse'
+        '400':
+          description: Bad Request (e.g., missing message text)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound' # Session not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /sessions/{sessionId}/generate:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: ID of the session to trigger generation from.
+    post:
+      tags: [Sessions, Projects]
+      summary: Trigger AI project generation
+      description: Initiates the AI backend process to generate a project based on the session context.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false # Optional params for generation
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateProjectInput'
+      responses:
+        '202': # Accepted - Generation started (async)
+          description: Project generation initiated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateProjectResponse' # Contains status: generating
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound' # Session not found
+        '429':
+          description: Usage limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /projects:
+    get:
+      tags: [Projects]
+      summary: List user projects
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of user projects.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectSummaryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /projects/{projectId}:
+    parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: ID of the project.
+    get:
+      tags: [Projects]
+      summary: Get project details
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Project details retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectDetailResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    patch:
+      tags: [Projects]
+      summary: Update project metadata
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectUpdateInput'
+      responses:
+        '200':
+          description: Project updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectDetailResponse' # Returns partial updated project
+        '400':
+          description: Bad Request (e.g., no fields provided)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags: [Projects]
+      summary: Delete a project
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Project deleted successfully.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /projects/{projectId}/download:
+    parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: ID of the project to download.
+    get:
+      tags: [Projects]
+      summary: Get project download link
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Download link generated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DownloadResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Project not found or no downloadable content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+# --- Tags Definition (Keep tags at the top level) ---
+tags:
+  - name: Users
+    description: User profile and usage management
+  - name: Sessions
+    description: AI conversation sessions and messages
+  - name: Projects
+    description: Generated code projects management
+  - name: ADK
+    description: Agent Development Kit integration endpoints 

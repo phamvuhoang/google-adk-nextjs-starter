@@ -1,0 +1,74 @@
+# OS-generated
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Env files
+.env
+.env.*
+firebase-key.json
+
+# Node / JavaScript / TypeScript (Next.js frontend)
+node_modules/
+.next/
+out/
+coverage/
+.next-env.d.ts
+*.tsbuildinfo
+.pnp/
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Python (AI agent)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+
+# Build output
+build/
+dist/
+target/
+
+# Java
+*.class
+*.jar
+*.war
+
+# Executables
+*.exe
+*.app
+
+# IDEs & editors
+.idea/
+.vscode/
+*.code-workspace
+.cursor/
+.cursorignore
+.cursorrules
+
+# Tests
+TEST*.xml
+
+# Large media files (optional)
+*.mp4
+*.tiff
+*.avi
+*.flv
+*.mov
+*.wmv
+
+# Deployment
+.vercel/
