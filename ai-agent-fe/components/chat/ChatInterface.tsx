@@ -133,7 +133,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ sessionId: initial
         fetchMessages();
     }, [user, currentSessionId]); // Depend on currentSessionId
 
-    // Simplified function to send message and receive single JSON response
+    // Reverted function to send message via the sessions/messages endpoint
     const sendMessageToServer = useCallback(async (messageText: string) => {
         if (!messageText.trim() || isLoading || !user) return;
 
@@ -164,46 +164,58 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ sessionId: initial
 
         try {
             const idToken = await user.getIdToken();
-            // Call the ADK proxy endpoint, expecting JSON
-            const response = await fetch(`/api/adk`, {
+            // Call the dedicated messages endpoint for the session
+            const response = await fetch(`/api/sessions/${currentSessionId}/messages`, { 
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${idToken}`,
                 },
                 body: JSON.stringify({
-                    sessionId: currentSessionId,
-                    message: messageText
+                    // Ensure the body matches what the messages endpoint expects
+                    // Assuming it expects a 'message' field based on previous context
+                    message: messageText 
                 }),
             });
 
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({ error: `HTTP error ${response.status}` }));
-                throw new Error(errorData.error || 'Failed to connect to agent');
+                throw new Error(errorData.error || 'Failed to send message');
             }
 
-            // API route now returns assistant message structure directly
+            // Expecting the response structure defined by AssistantApiResponse
             const assistantResponseData: AssistantApiResponse = await response.json();
 
-            const assistantMessage: DisplayMessage = {
-                messageId: assistantResponseData.messageId || `assistant-${Date.now()}`,
-                sender: 'assistant',
-                text: assistantResponseData.text || "(No response text)",
-                createdAt: new Date(), // Use current time for assistant message
-                role: assistantResponseData.role || 'assistant',
-                next_actions: assistantResponseData.next_actions || [],
-            };
+            // Check if the API indicated processing (like ADK call was made but result pending)
+            // This depends on how messages/route.ts handles ADK interaction
+            if (assistantResponseData.processing) {
+                 console.log("Assistant is processing... (waiting for subsequent update or WebSocket)");
+                 // Keep the thinking message for now, or replace it depending on desired UX
+                 // Or remove optimistic user message if needed
+            } else if (assistantResponseData.text) { // Handle direct text response
+                const assistantMessage: DisplayMessage = {
+                    messageId: assistantResponseData.messageId || `assistant-${Date.now()}`,
+                    sender: 'assistant',
+                    text: assistantResponseData.text,
+                    createdAt: new Date(), 
+                    role: 'assistant', // Role is fixed in AssistantApiResponse
+                    next_actions: assistantResponseData.next_actions || [],
+                };
 
-            setMessages((prev) => {
-                // Remove optimistic user message and thinking placeholder
-                const filteredPrev = prev.filter(m => 
-                    m.messageId !== optimisticUserMessage.messageId && 
-                    m.messageId !== thinkingMessageId
-                );
-                // Add confirmed user message and the final assistant message
-                const confirmedUserMessage = { ...optimisticUserMessage, messageId: `user-${Date.now()}-${Math.random()}` };
-                return [...filteredPrev, confirmedUserMessage, assistantMessage];
-            });
+                setMessages((prev) => {
+                    const filteredPrev = prev.filter(m => 
+                        m.messageId !== optimisticUserMessage.messageId && 
+                        m.messageId !== thinkingMessageId
+                    );
+                    const confirmedUserMessage = { ...optimisticUserMessage, messageId: `user-${Date.now()}-${Math.random()}` };
+                    return [...filteredPrev, confirmedUserMessage, assistantMessage];
+                });
+             } else {
+                 // Handle case where response is OK but no text/processing flag
+                 console.warn("Received OK response from messages endpoint without text or processing flag.");
+                 // Remove thinking placeholder, maybe show a generic ack if needed
+                 setMessages((prev) => prev.filter(m => m.messageId !== thinkingMessageId));
+             }
 
         } catch (error) {
             console.error("Error sending message:", error);
@@ -215,7 +227,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ sessionId: initial
                 createdAt: new Date(),
                 role: 'system'
             };
-             // Remove optimistic user message and thinking placeholder, add error
              setMessages((prev) => {
                 const filtered = prev.filter(m => 
                     m.messageId !== optimisticUserMessage.messageId &&
