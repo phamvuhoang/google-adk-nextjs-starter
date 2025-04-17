@@ -98,31 +98,8 @@ Refer to the specific deployment scripts or documentation within each sub-projec
 
 Generally, you will need to:
 
-- Build Docker images for both the backend and frontend.
+- Build Docker images for the backend ai agent service.
 - Push the images to a container registry (e.g., Google Artifact Registry).
 - Deploy the images as Cloud Run services.
 - Configure necessary IAM permissions (like allowing the frontend service account to invoke the backend).
 
-*(The existing gcloud commands in the previous README version might be relevant here but need context-specific adjustments)*
-
-```gcloud
-# Example: Allow Firebase service account (if used for frontend hosting/auth) to invoke the backend
-# gcloud run services add-iam-policy-binding <BACKEND_SERVICE_NAME> \
-#   --region=<REGION> \
-#   --member="serviceAccount:<YOUR_SERVICE_ACCOUNT>@<YOUR_PROJECT_ID>.iam.gserviceaccount.com" \
-#   --role="roles/run.invoker" \
-#   --project=<YOUR_PROJECT_ID>
-
-# Example: Create keys for service accounts if needed for specific integrations
-# gcloud iam service-accounts keys create frontend-key.json \
-#  --iam-account=<YOUR_SERVICE_ACCOUNT>@<YOUR_PROJECT_ID>.iam.gserviceaccount.com \
-#  --project=<YOUR_PROJECT_ID>
-```
-
-## Contributing
-
-[Details on contributing to the project, code style, pull request process, etc.]
-
-## License
-
-[Specify project license, e.g., Apache 2.0, MIT]
