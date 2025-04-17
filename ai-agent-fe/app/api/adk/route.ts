@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAdminApp } from '@/lib/firebase/admin';
 import { v4 as uuid } from 'uuid';
 import { 
-  AdkMessage, 
-  AdkRequestPayload,
   AdkSessionPayload,
-  AdkApiResponse,
-  AdkEvent
+  AdkRequestPayloadWithStreaming,
+  AdkEvent 
 } from '@/lib/types/adk';
+import { AssistantApiResponse } from '@/lib/types/ui'; 
 import { GoogleAuth } from 'google-auth-library';
+// Remove ReadableStream import if not piping directly
+// import { ReadableStream } from 'stream/web'; 
 
 // Get the environment-specific configuration
 const useCloudADKEnv = process.env.USE_CLOUD_ADK;
@@ -61,7 +62,7 @@ async function getCloudRunIdToken() {
         const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
         auth = new GoogleAuth({
           credentials,
-          projectId: process.env.GOOGLE_CLOUD_PROJECT,
+          projectId: process.env.GOOGLE_CLOUD_PROJECT || 'mindlab-3ce49',
         });
         
         if (debugMode) {
@@ -127,116 +128,6 @@ async function getFirebaseAdminToken() {
 }
 
 /**
- * Parse the agent response to extract structured content
- */
-function parseAgentResponse(responseData: string | AdkEvent[]): AdkMessage {
-  try {
-    // Check if the response is already parsed as JSON
-    if (typeof responseData !== 'string') {
-      // The response is already a JSON object/array
-      
-      // ADK returns an array of events; find the model response
-      if (Array.isArray(responseData)) {
-        // Find the first event with model content
-        const modelEvent = responseData.find(
-          event => event.content?.role === 'model' || event.author === 'AICofounder'
-        );
-        
-        if (modelEvent) {
-          const textContent = modelEvent.content?.parts?.[0]?.text;
-          
-          if (textContent) {
-            // Try to extract structured JSON from markdown format
-            const jsonMatch = textContent.match(/```json\s*([\s\S]*?)\s*```/);
-            
-            if (jsonMatch && jsonMatch[1]) {
-              try {
-                // Parse the JSON inside the markdown block
-                const parsed = JSON.parse(jsonMatch[1]);
-                return {
-                  content: {
-                    parts: [
-                      { 
-                        text: parsed.content,
-                        mime_type: 'text/plain'
-                      }
-                    ],
-                    next_actions: parsed.next_actions || []
-                  }
-                };
-              } catch (jsonError) {
-                console.error('Error parsing JSON inside markdown block:', jsonError);
-                // Fall back to using the full text
-                return {
-                  content: {
-                    parts: [{ text: textContent, mime_type: 'text/plain' }]
-                  }
-                };
-              }
-            }
-            
-            // No JSON block found, use the text directly
-            return {
-              content: {
-                parts: [{ text: textContent, mime_type: 'text/plain' }]
-              }
-            };
-          }
-        }
-      }
-      
-      // Fallback for unexpected structure
-      console.warn('Unexpected ADK response format:', typeof responseData);
-      return {
-        content: {
-          parts: [{ 
-            text: 'Received response in unexpected format from AI agent', 
-            mime_type: 'text/plain' 
-          }]
-        }
-      };
-    }
-    
-    // Handle string response (old path for backward compatibility)
-    // Look for a JSON object in the response string
-    const jsonMatch = responseData.match(/```json\s*([\s\S]*?)\s*```/);
-    
-    if (jsonMatch && jsonMatch[1]) {
-      // Parse the JSON object
-      const parsed = JSON.parse(jsonMatch[1]);
-      return {
-        content: {
-          parts: [
-            { 
-              text: parsed.content,
-              mime_type: 'text/plain'
-            }
-          ],
-          next_actions: parsed.next_actions || []
-        }
-      };
-    }
-    
-    // If no JSON object is found, create a simple message
-    return {
-      content: {
-        parts: [{ text: responseData, mime_type: 'text/plain' }]
-      }
-    };
-  } catch (error) {
-    console.error('Error parsing agent response:', error);
-    return {
-      content: {
-        parts: [{ 
-          text: 'Error processing the AI agent response', 
-          mime_type: 'text/plain' 
-        }]
-      }
-    };
-  }
-}
-
-/**
  * Create or ensure a session exists in the ADK service
  */
 async function ensureSession(
@@ -283,20 +174,35 @@ async function ensureSession(
   }
 }
 
+// Helper to extract text and next_actions from ADK JSON content string
+function parseAdkJsonContentString(jsonString: string): { text: string | null, next_actions: string[] } {
+    try {
+        const parsed = JSON.parse(jsonString);
+        return {
+            text: parsed.content || null,
+            next_actions: parsed.next_actions || []
+        };
+    } catch (e) {
+        console.warn("Could not parse ADK JSON content string:", jsonString, e);
+        if (!jsonString.trim().startsWith('{')) {
+             return { text: jsonString, next_actions: [] };
+        }
+        return { text: null, next_actions: [] };
+    }
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Parse the incoming request
     const requestData = await request.json();
     
     // Extract data - support both formats:
-    // 1. { sessionId: string, message: string } - direct API call
-    // 2. { sessionId: string, userMessage: string } - from messages/route.ts
     const sessionId = requestData.sessionId;
     const message = requestData.message || requestData.userMessage;
     
     // Log debugging information
     if (debugMode) {
-      console.log('Received request:', {
+      console.log('Received request for streaming:', {
         sessionId,
         message
       });
@@ -318,41 +224,28 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Prepare the request to the ADK service
+    // Prepare the request headers to the ADK service
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
+      'Accept': 'text/event-stream' // Important: Accept SSE
     };
     
-    // Always add authentication if using Cloud ADK, regardless of bypassAuth setting
+    // Add authentication (same logic as before)
     if (useCloudADK) {
-      // Get ID token specifically for Cloud Run authentication
       const idToken = await getCloudRunIdToken();
       if (!idToken) {
-        if (debugMode) {
-          console.error('Failed to obtain authentication token for Cloud ADK');
-        }
-        return NextResponse.json(
-          { error: 'Failed to obtain authentication token for Cloud ADK' },
-          { status: 500 }
-        );
+        if (debugMode) console.error('Failed to obtain auth token for Cloud ADK');
+        return NextResponse.json({ error: 'Failed to obtain auth token for Cloud ADK' }, { status: 500 });
       }
-      
-      // For Cloud Run, format must be exactly: Bearer TOKEN (no extra spaces, case sensitive)
       headers['Authorization'] = `Bearer ${idToken}`;
-      
       if (debugMode) {
-        // Log just the first few characters of the token for debugging (avoid logging full tokens)
         const tokenPrefix = idToken.substring(0, 10) + '...';
-        console.log(`Added authentication token for Cloud ADK request: Bearer ${tokenPrefix}`);
+        console.log(`Added auth token for Cloud ADK: Bearer ${tokenPrefix}`);
       }
     } else if (!bypassAuth) {
-      // Only for local ADK that requires auth
       const token = await getFirebaseAdminToken();
       if (!token) {
-        return NextResponse.json(
-          { error: 'Failed to obtain authentication token' },
-          { status: 500 }
-        );
+        return NextResponse.json({ error: 'Failed to obtain auth token' }, { status: 500 });
       }
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -360,102 +253,144 @@ export async function POST(request: NextRequest) {
     // First, ensure the session exists
     const sessionCreated = await ensureSession(appName, userId, finalSessionId, headers);
     if (!sessionCreated) {
-      return NextResponse.json(
-        { error: 'Failed to create or verify session' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: 'Failed to create or verify session' }, { status: 500 });
     }
     
-    // Set up the request payload for ADK
-    const payload: AdkRequestPayload = {
+    // Set up the request payload for ADK using the imported type
+    const adkPayload: AdkRequestPayloadWithStreaming = {
       app_name: appName,
       user_id: userId,
       session_id: finalSessionId,
       new_message: {
         role: "user",
         parts: [{ text: message.trim() }]
-      }
+      },
+      streaming: true // Request SSE streaming
     };
+
+    // Target the /run_sse endpoint explicitly
+    const sseUrl = `${adkURL}/run_sse`; 
     
     if (debugMode) {
-      console.log(`Sending request to ADK at: ${fullAdkURL}`);
+      console.log(`Sending SSE request to ADK at: ${sseUrl}`);
       console.log('Using headers:', headers);
-      console.log('Using payload:', JSON.stringify(payload));
+      console.log('Using payload:', JSON.stringify(adkPayload));
     }
     
-    // Make the request to the ADK service
-    const response = await fetch(fullAdkURL, {
+    // Make the streaming request to the ADK service
+    const adkResponse = await fetch(sseUrl, {
       method: 'POST',
       headers,
-      body: JSON.stringify(payload),
+      body: JSON.stringify(adkPayload),
     });
     
-    // Check if the request was successful
-    if (!response.ok) {
-      const errorText = await response.text();
-      const errorDetails = `ADK proxy request failed (${response.status}): ${errorText}`;
+    // Check if the initial response is okay (status code 200)
+    if (!adkResponse.ok) {
+      const errorText = await adkResponse.text();
+      const errorDetails = `ADK SSE request failed (${adkResponse.status}): ${errorText}`;
       console.error('ADK service error:', {
-        status: response.status,
-        statusText: response.statusText,
+        status: adkResponse.status,
+        statusText: adkResponse.statusText,
         body: errorText,
-        headers: Object.fromEntries(response.headers.entries()),
-        url: fullAdkURL
+        headers: Object.fromEntries(adkResponse.headers.entries()),
+        url: sseUrl
       });
-      
       console.error(errorDetails);
-      
       return NextResponse.json(
-        { error: `ADK proxy request failed: ${errorText}` },
-        { status: response.status }
+        { error: `ADK SSE request failed: ${errorText}` },
+        { status: adkResponse.status }
       );
     }
-    
-    // Parse the response from the ADK service as JSON, not text
-    let responseData;
-    const contentType = response.headers.get('content-type');
-    
-    // If the response is JSON, parse it directly
-    if (contentType?.includes('application/json')) {
-      responseData = await response.json();
-    } else {
-      // Otherwise, get the raw text
-      responseData = await response.text();
-    }
-    
-    if (debugMode) {
-      console.log('Raw ADK response type:', typeof responseData);
-      if (typeof responseData === 'string') {
-        console.log('Raw ADK response:', responseData.substring(0, 500) + 
-          (responseData.length > 500 ? '...' : ''));
-      } else {
-        console.log('Raw ADK response:', JSON.stringify(responseData).substring(0, 500) + 
-          (JSON.stringify(responseData).length > 500 ? '...' : ''));
-      }
-    }
-    
-    // Parse the agent response
-    const finalResponse = parseAgentResponse(responseData);
 
-    if (debugMode) {
-      console.log('ADK Final response:', finalResponse);
+    if (!adkResponse.body) {
+      return NextResponse.json({ error: 'ADK service did not return a stream body' }, { status: 500 });
     }
-    
-    // Return the formatted response
-    const apiResponse: AdkApiResponse = {
-      message: finalResponse,
-      session_id: finalSessionId,
-    };
-    
-    return NextResponse.json(apiResponse);
+
+    // --- Process the SSE Stream Internally --- 
+    let finalApiResponse: AssistantApiResponse | null = null;
+    let processingError: string | null = null;
+
+    const reader = adkResponse.body!.getReader(); 
+    const decoder = new TextDecoder("utf-8");
+    let partial = "";
+
+    try {
+      while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          partial += decoder.decode(value, { stream: true });
+          let boundary;
+
+          while ((boundary = partial.indexOf("\n\n")) !== -1) {
+              const messageChunk = partial.slice(0, boundary);
+              partial = partial.slice(boundary + 2);
+
+              if (messageChunk.startsWith("data: ")) {
+                  try {
+                      const jsonData = messageChunk.slice(6);
+                      const event: AdkEvent = JSON.parse(jsonData); 
+
+                      // Check if this event contains the definitive final JSON response
+                      if (event.content?.parts?.[0]?.text) {
+                          const rawText = event.content.parts[0].text;
+                          const jsonMatch = rawText.match(/```json\s*([\s\S]*?)\s*```/);
+                          
+                          if (jsonMatch?.[1]) {
+                              // Found the final JSON block, parse it and consider processing done
+                              const parsedContent = parseAdkJsonContentString(jsonMatch[1]);
+                              if (parsedContent.text !== null) { // Ensure we got valid content
+                                  finalApiResponse = {
+                                      messageId: event.id || `assistant-${Date.now()}`,
+                                      text: parsedContent.text,
+                                      next_actions: parsedContent.next_actions,
+                                      sessionId: finalSessionId,
+                                      role: 'assistant', 
+                                  };
+                              } else {
+                                  console.warn("Parsed null text from final JSON block in event:", event.id);
+                              }
+                          } else {
+                            // Optional: Handle potential non-JSON text from model/AICofounder 
+                            // Currently, we prioritize the explicit JSON block.
+                          }
+                      }
+                      // Ignore events without content or not matching the final structure
+
+                  } catch (e) {
+                      console.error("Failed to parse SSE event in API route:", e, messageChunk);
+                      processingError = `Failed to parse agent event: ${e instanceof Error ? e.message : String(e)}`;
+                  }
+              }
+          }
+      }
+      if (debugMode) console.log('Finished processing ADK stream internally.');
+    } catch (streamError) {
+        console.error('Error reading ADK stream in API route:', streamError);
+        processingError = `Failed to read agent response stream: ${streamError instanceof Error ? streamError.message : String(streamError)}`;
+    } finally {
+        reader.releaseLock(); 
+    }
+    // --- End Stream Processing --- 
+
+    // Check if we successfully extracted the final response
+    if (finalApiResponse) {
+        if (debugMode) {
+            console.log('Sending final parsed response to frontend:', finalApiResponse);
+        }
+        return NextResponse.json(finalApiResponse);
+    } else {
+        // If no valid finalApiResponse was built, return an error
+        // Use the processing error if available, otherwise a generic message
+        const errorMsg = processingError || "Agent did not return a recognizable final response.";
+        console.error("Could not extract final response from ADK stream. Error:", errorMsg);
+        // Try to return a 500 error, but might need adjustment based on expected frontend handling
+        return NextResponse.json({ error: errorMsg }, { status: 500 });
+    }
     
   } catch (error) {
-    const errorMessage = `Error connecting to ADK agent: ${error instanceof Error ? error.message : String(error)}`;
-    console.error('Error in ADK route handler:', error);
-    console.error(errorMessage);
-    
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    );
+    const errorMessage = `Error in ADK API route: ${error instanceof Error ? error.message : String(error)}`;
+    console.error(errorMessage, error);
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
-} 
+}

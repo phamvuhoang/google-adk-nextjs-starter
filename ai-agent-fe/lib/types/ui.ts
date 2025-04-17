@@ -30,6 +30,7 @@ export interface DisplayMessage {
     metadata?: Record<string, unknown>;
     next_actions?: string[];
     processing?: boolean;
+    isStreaming?: boolean; // Optional flag for streaming state
 }
 
 /**
@@ -52,4 +53,4 @@ export interface AssistantApiResponse {
     sessionId?: string; // API may return session ID
     error?: string;
     message?: string;
-} 
+}

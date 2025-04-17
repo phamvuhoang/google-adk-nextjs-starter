@@ -6,7 +6,7 @@
  * ADK message part representation
  */
 export interface AdkPart {
-  text?: string;
+  text: string;
   mime_type?: string;
 }
 
@@ -22,7 +22,9 @@ export interface AdkMessageContent {
  * Structured ADK message
  */
 export interface AdkMessage {
-  content: AdkMessageContent;
+  role: 'user' | 'model' | 'system' | 'tool';
+  parts: AdkPart[];
+  next_actions?: string[];
 }
 
 /**
@@ -43,8 +45,15 @@ export interface AdkRequestPayload {
   session_id: string;
   new_message: {
     role: string;
-    parts: { text: string }[];
+    parts: Array<{ text: string }>;
   };
+}
+
+/**
+ * Extended payload for streaming
+ */
+export interface AdkRequestPayloadWithStreaming extends AdkRequestPayload {
+  streaming?: boolean;
 }
 
 /**
@@ -89,11 +98,20 @@ export interface AdkEventActions {
  * ADK Event structure from direct API response
  */
 export interface AdkEvent {
-  content?: AdkEventContent;
-  author?: string;
+  id: string;
+  timestamp: number;
+  author: string;
   invocation_id?: string;
   actions?: AdkEventActions;
-  id?: string;
-  timestamp?: number;
+  content?: AdkMessage;
+}
+
+export interface AdkStateDelta {
   [key: string]: unknown;
-} 
+}
+
+export interface AdkAction {
+  state_delta?: AdkStateDelta;
+  artifact_delta?: Record<string, unknown>;
+  requested_auth_configs?: Record<string, unknown>;
+}
