@@ -11,7 +11,7 @@ yarn-error.log*
 
 # Env files
 .env
-.env.*
+.env.local
 firebase-key.json
 
 # Node / JavaScript / TypeScript (Next.js frontend)
